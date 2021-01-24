@@ -14,8 +14,18 @@
 namespace Smile\ElasticsuiteSwatches\Helper;
 
 use Magento\Catalog\Api\Data\ProductInterface as Product;
+use Magento\Catalog\Model\ResourceModel\Product\Attribute\Collection;
 use Magento\Catalog\Model\ResourceModel\Product\Collection as ProductCollection;
 use Magento\Eav\Model\Entity\Attribute;
+use Magento\Catalog\Api\ProductRepositoryInterface;
+use Magento\Catalog\Model\Product\Image\UrlBuilder;
+use Magento\Catalog\Model\ResourceModel\Product\CollectionFactory;
+use Magento\Framework\App\ObjectManager;
+use Magento\Framework\Serialize\Serializer\Json;
+use Magento\Store\Model\StoreManagerInterface;
+use Magento\Swatches\Model\ResourceModel\Swatch\CollectionFactory as SwatchCollectionFactory;
+use Magento\Swatches\Model\SwatchAttributesProvider;
+use Magento\Swatches\Model\SwatchAttributeType;
 
 /**
  * ElasticSuite swatches helper.
@@ -28,14 +38,77 @@ use Magento\Eav\Model\Entity\Attribute;
 class Swatches extends \Magento\Swatches\Helper\Data
 {
     /**
+     * @var Collection
+     */
+    private $attributeCollection;
+
+    /**
+     * Attribute codes that should be loaded for variation products
+     *
+     * @var string[]
+     */
+    private $variationSelectAttributes;
+
+    /**
+     * Attribute codes for all attributes with frontend_input = 'media_gallery'
+     *
+     * @var string[]
+     */
+    private $imageAttributes;
+
+    /**
+     * @param CollectionFactory $productCollectionFactory
+     * @param ProductRepositoryInterface $productRepository
+     * @param StoreManagerInterface $storeManager
+     * @param SwatchCollectionFactory $swatchCollectionFactory
+     * @param UrlBuilder $urlBuilder
+     * @param Json|null $serializer
+     * @param SwatchAttributesProvider|null $swatchAttributesProvider
+     * @param SwatchAttributeType|null $swatchTypeChecker
+     * @param Collection|null $attributeCollection
+     * @param array $variationSelectAttributes
+     */
+    public function __construct(
+        CollectionFactory $productCollectionFactory,
+        ProductRepositoryInterface $productRepository,
+        StoreManagerInterface $storeManager,
+        SwatchCollectionFactory $swatchCollectionFactory,
+        UrlBuilder $urlBuilder,
+        Json $serializer = null,
+        SwatchAttributesProvider $swatchAttributesProvider = null,
+        SwatchAttributeType $swatchTypeChecker = null,
+        Collection $attributeCollection = null,
+        array $variationSelectAttributes = []
+    ) {
+        parent::__construct(
+            $productCollectionFactory,
+            $productRepository,
+            $storeManager,
+            $swatchCollectionFactory,
+            $urlBuilder,
+            $serializer,
+            $swatchAttributesProvider,
+            $swatchTypeChecker);
+
+        $this->attributeCollection = $attributeCollection
+            ?: ObjectManager::getInstance()->get(Collection::class);
+        $this->variationSelectAttributes = $variationSelectAttributes;
+    }
+
+
+    /**
      * @SuppressWarnings(PHPMD.ElseExpression)
      * {@inheritDoc}
      */
     public function loadVariationByFallback(Product $parentProduct, array $attributes)
     {
+        if (!$this->isProductHasSwatch($parentProduct)) {
+            return false;
+        }
+
         $variation = false;
 
-        if ($this->isProductHasSwatch($parentProduct) && $parentProduct->getDocumentSource() !== null) {
+        if ($parentProduct->getDocumentSource() !== null) {
             $variation = $this->loadVariationsFromSearchIndex($parentProduct, $attributes);
         } else {
             $productCollection = $this->productCollectionFactory->create();
@@ -61,11 +134,12 @@ class Swatches extends \Magento\Swatches\Helper\Data
             );
 
             $this->addFilterByAttributes($productCollection, $resultAttributesToFilter);
+            $this->addVariationSelectAttributes($productCollection);
 
             $variationProduct = $productCollection->getFirstItem();
 
             if ($variationProduct && $variationProduct->getId()) {
-                $variation = $this->productRepository->getById($variationProduct->getId());
+                $variation = $variationProduct;
             }
         }
 
@@ -73,7 +147,37 @@ class Swatches extends \Magento\Swatches\Helper\Data
     }
 
     /**
-     * Retrive options ids from a labels array.
+     * Add desired collection select attributes
+     *
+     * @param ProductCollection $productCollection
+     * @throws \Magento\Framework\Exception\LocalizedException
+     */
+    private function addVariationSelectAttributes(ProductCollection $productCollection): void
+    {
+        $productCollection->addMediaGalleryData();
+        foreach ($this->getImageAttributes() as $imageTypeAttribute) {
+            $productCollection->addAttributeToSelect($imageTypeAttribute);
+        }
+
+        foreach ($this->variationSelectAttributes as $additionalAttribute) {
+            $productCollection->addAttributeToSelect($additionalAttribute);
+        }
+    }
+
+    /**
+     * @return array|string[]
+     */
+    private function getImageAttributes()
+    {
+        if (!$this->imageAttributes) {
+            $this->attributeCollection->addFieldToFilter('frontend_input', 'media_image');
+            $this->imageAttributes = $this->attributeCollection->getColumnValues('attribute_code');
+        }
+        return $this->imageAttributes;
+    }
+
+    /**
+     * Retrieve options ids from a labels array.
      *
      * @param Attribute $attribute Attribute.
      * @param string[]  $labels    Labels
@@ -146,11 +250,12 @@ class Swatches extends \Magento\Swatches\Helper\Data
             $resultAttributesToFilter = array_merge($attributes, array_diff_key($allAttributesArray, $attributes));
 
             $this->addFilterByAttributes($productCollection, $resultAttributesToFilter);
+            $this->addVariationSelectAttributes($productCollection);
 
             $variationProduct = $productCollection->getFirstItem();
 
             if ($variationProduct && $variationProduct->getId()) {
-                $variation = $this->productRepository->getById($variationProduct->getId());
+                $variation = $variationProduct;
             }
         }
 
